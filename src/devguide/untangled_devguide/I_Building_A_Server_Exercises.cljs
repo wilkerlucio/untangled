@@ -92,7 +92,7 @@
     (let [{:keys [ui/loading-data something] :as props} (om/props this)]
       (dom/div nil
         (dom/h2 nil (str "Root " (if loading-data "(loading)" "")))
-        (dom/button #js {:onClick (fn [evt] (df/load-data this [:something]))} "Load data")
+        (dom/button #js {:onClick (fn [evt] #_(df/load-data this [:something]))} "Load data")
         (df/lazily-loaded render-something something)))))
 
 (defcard server-exercise-1

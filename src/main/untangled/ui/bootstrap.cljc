@@ -4,6 +4,7 @@
     #?(:clj
             js)
             [untangled.ui.elements :as ele]
+            #?(:cljs [goog.object :as gobj])
             [untangled.i18n :refer [tr tr-unsafe]]
             [untangled.client.mutations :as m]
             [clojure.string :as str]
@@ -414,6 +415,7 @@
   (ident [this props] (dropdown-item-ident props))
   Object
   (render [this]
+    #?(:cljs (js/console.log :path (gobj/get (.-props this) "omcljs$path")))
     (let [{:keys [::label ::id ::tx ::active? ::disabled?] :or {tx []}} (om/props this)
           active?  (or active? (om/get-computed this :active?))
           onSelect (or (om/get-computed this :onSelect) identity)]
@@ -524,11 +526,10 @@
   Object
   (render [this]
     (let [{:keys [type] :as child} (om/props this)
-          computed (om/get-computed this)]
-      (log/error (meta child))
+          {:keys [onSelect] :as computed} (om/get-computed this)]
       (case type
         :bootstrap.navitem/by-id (ui-nav-link (om/computed child computed))
-        :bootstrap.dropdown/by-id (ui-dropdown (om/computed child computed))
+        :bootstrap.dropdown/by-id (ui-dropdown child :onSelect onSelect)
         (dom/p nil "Unknown link type!")))))
 
 (def ui-nav-item (om/factory NavItemUnion {:keyfn ::id}))
