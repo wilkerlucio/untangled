@@ -1,10 +1,12 @@
 (ns untangled.client.network
   (:refer-clojure :exclude [send])
-  (:require [untangled.client.logging :as log]
-            [cognitect.transit :as ct]
+  (:require
+    [untangled.client.logging :as log]
+    [cognitect.transit :as ct]
     #?(:cljs [goog.events :as events])
-            [om.transit :as t]
-            [clojure.string :as str])
+    [om.next :as om]
+    [om.transit :as t]
+    [clojure.string :as str])
   #?(:cljs (:import [goog.net XhrIo EventType])))
 
 (declare make-untangled-network)
@@ -34,37 +36,37 @@
 #?(:cljs
    (defn parse-response
      "An XhrIo-specific implementation method for interpreting the server response."
-     ([xhr-io] (parse-response xhr-io nil))
-     ([xhr-io read-handlers]
-      (try (let [text          (.getResponseText xhr-io)
+     ([xhrio] (parse-response xhrio nil))
+     ([xhrio read-handlers]
+      (try (let [text          (.getResponseText xhrio)
                  base-handlers {"f" (fn [v] (js/parseFloat v)) "u" cljs.core/uuid}
                  handlers      (if (map? read-handlers) (merge base-handlers read-handlers) base-handlers)]
              (if (str/blank? text)
-               (.getStatus xhr-io)
+               (.getStatus xhrio)
                (ct/read (t/reader {:handlers handlers})
-                 (.getResponseText xhr-io))))
+                 (.getResponseText xhrio))))
            (catch js/Object e {:error 404 :message "Server down"})))))
 
 (defrecord Network [url request-transform global-error-callback complete-app transit-handlers]
   NetworkBehavior
   (serialize-requests? [this] true)
   IXhrIOCallbacks
-  (response-ok [this xhr-io valid-data-callback]
+  (response-ok [this xhrio valid-data-callback]
     ;; Implies:  everything went well and we have a good response
     ;; (i.e., got a 200).
     #?(:cljs
        (try
          (let [read-handlers  (:read transit-handlers)
-               query-response (parse-response xhr-io read-handlers)]
+               query-response (parse-response xhrio read-handlers)]
            (when (and query-response valid-data-callback) (valid-data-callback query-response)))
-         (finally (.dispose xhr-io)))))
-  (response-error [this xhr-io error-callback]
+         (finally (.dispose xhrio)))))
+  (response-error [this xhrio error-callback]
     ;; Implies:  request was sent.
     ;; *Always* called if completed (even in the face of network errors).
     ;; Used to detect errors.
     #?(:cljs
        (try
-         (let [status                 (.getStatus xhr-io)
+         (let [status                 (.getStatus xhrio)
                log-and-dispatch-error (fn [str error]
                                         ;; note that impl.application/initialize will partially apply the
                                         ;; app-state as the first arg to global-error-callback
@@ -78,8 +80,8 @@
                {:type :network})
              (log-and-dispatch-error
                (str "SERVER ERROR CODE: " status)
-               (parse-response xhr-io transit-handlers))))
-         (finally (.dispose xhr-io)))))
+               (parse-response xhrio transit-handlers))))
+         (finally (.dispose xhrio)))))
   UntangledNetwork
   (send [this edn ok error]
     #?(:cljs
@@ -95,7 +97,6 @@
          (events/listen xhrio (.-ERROR EventType) #(response-error this xhrio error)))))
   (start [this app]
     (assoc this :complete-app app)))
-
 
 (defn make-untangled-network
   "Build an Untangled Network object using the default implementation.
@@ -126,6 +127,7 @@
                  :request-transform     request-transform
                  :global-error-callback (atom global-error-callback)}))
 
+
 (defrecord MockNetwork
   [complete-app]
   UntangledNetwork
@@ -134,3 +136,53 @@
     (assoc this :complete-app app)))
 
 (defn mock-network [] (map->MockNetwork {}))
+
+
+(defn- on-ok [{:keys [response->edn app-state]} xhrio om-ok-cb query]
+  (try
+    (when-let [response (response->edn (.getResponse xhrio) query @app-state)]
+      (om-ok-cb response))
+    (finally (.dispose xhrio))))
+
+(defn- on-error [{:keys [app-state on-network-error on-network-error]} xhrio om-error-cb query]
+  (try
+    (om-error-cb (on-network-error xhrio @app-state query))
+    (finally (.dispose xhrio))))
+
+(defn default-on-network-error [{:keys [on-network-error]} xhrio om-error-cb query]
+  (try
+    (let [status (.getStatus xhrio)]
+      (log/error (str "ERROR: RestNetwork failed to process: " query "."))
+      (om-error-cb (if (zero? status) {:type :network} {})))
+    (finally (.dispose xhrio))))
+
+(defrecord RestNetwork [app-state om-query->request response->edn on-network-error serialize-requests?]
+  NetworkBehavior
+  (serialize-requests? [this] serialize-requests?)
+  UntangledNetwork
+  (send [this query ok-cb error-cb]
+    #?(:cljs
+       (let [xhrio (make-xhrio), {:keys [url request-method headers body]} (om-query->request query @app-state)]
+         (.send xhrio url (name request-method) body headers)
+         (events/listen xhrio (.-SUCCESS EventType)
+           #(on-ok this xhrio ok-cb query))
+         (events/listen xhrio (.-ERROR EventType)
+           #(on-error this xhrio error-cb query)))))
+  (start [this app]
+    (assoc this :app-state (om/app-state (:reconciler app)))))
+
+(defn make-rest-network
+  "Takes as kw arguments:
+   - :om-query->request              - (fn [query app-state] ... request)
+
+   - :response->edn                  - (fn [json query app-state] ... edn)
+
+   - :on-network-error (OPTIONAL)    - (fn [xhrio app-state query] ... om-error)
+      - defaults to `default-on-network-error`
+      - for docs see https://developers.google.com/closure/library/docs/xhrio
+
+   - :serialize-requests? (OPTIONAL) - Boolean
+      - defaults to true
+
+   Returns an UntangledNetwork component, for use in untangled client networking as an additional remote."
+  [& {:as opts}] (map->RestNetwork (merge {:on-network-error default-on-network-error :serialize-requests? true} opts)))
