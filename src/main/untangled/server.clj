@@ -482,13 +482,38 @@ default-malformed-response
   "The multimethod for Untangled's built-in support for querying with a keyword "
   (fn [env keyword params] keyword))
 
-(declare server-read)
+(defn server-read
+  "A built-in read method for Untangled's built-in server Om parser."
+  [env k params]
+  (let [k (-> env :ast :key)]
+    (if (om.util/ident? k)
+      (read-entity env (first k) (second k) params)
+      (read-root env k params))))
 
 (defn untangled-parser
   "Builds and returns an Om parser that uses Untangled's query and mutation handling. See `defquery-entity`, `defquery-root`,
   and `defmutation` in the `untangled.server` namespace."
   []
   (om/parser {:read server-read :mutate server-mutate}))
+
+(defrecord UntangledApiParser []
+  Module
+  (system-key [this] ::untangled-api-parser)
+  (components [this] {})
+  APIHandler
+  (api-read [this] server-read)
+  (api-mutate [this] server-mutate)
+  component/Lifecycle
+  (start [this] this)
+  (stop [this] this))
+
+(defn make-untangled-api-parser
+  "Creates an `untangled-system` compatible `Module`,
+   that installs the `untangled-parser` server read and write parser methods into the chain of `ApiHandler`'s.
+
+   Optionally takes com.stuartsierra.component dependencies (map or vector)."
+  ([] (make-untangled-api-parser []))
+  ([deps] (component/using (map->UntangledApiParser {}) deps)))
 
 (s/def ::action (s/cat
                   :action-name (fn [sym] (= sym 'action))
@@ -563,12 +588,3 @@ The return value of `value` will be sent to the client.
     `(defmethod untangled.server/read-root ~kw [~env-sym ~'_ ~params-sym]
        (let [v# (do ~@value-body)]
          {:value v#}))))
-
-(defn server-read
-  "A built-in read method for Untangled's built-in server Om parser."
-  [env k params]
-  (let [k (-> env :ast :key)]
-    (if (om.util/ident? k)
-      (read-entity env (first k) (second k) params)
-      (read-root env k params))))
-
