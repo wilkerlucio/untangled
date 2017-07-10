@@ -48,4 +48,3 @@
                  :channel-server   (cs/make-channel-server)
                  :channel-listener (wsdemo/make-channel-listener)
                  }))
-

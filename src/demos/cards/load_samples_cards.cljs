@@ -107,5 +107,3 @@
   (dc/mkdn-pprint-source client/Person)
   (dc/mkdn-pprint-source client/People)
   (dc/mkdn-pprint-source client/Root))
-
-

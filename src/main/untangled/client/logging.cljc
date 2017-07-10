@@ -1,5 +1,6 @@
 (ns untangled.client.logging
-  #?(:cljs (:require cljs.pprint
+  #?(:cljs (:require
+             cljs.pprint
              [om.next :refer [*logger*]]
              [goog.log :as glog]
              [goog.debug.Logger.Level :as level])))

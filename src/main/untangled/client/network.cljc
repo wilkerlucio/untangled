@@ -1,12 +1,14 @@
 (ns untangled.client.network
   (:refer-clojure :exclude [send])
   (:require
-    [untangled.client.logging :as log]
-    [cognitect.transit :as ct]
+    [clojure.spec.alpha :as s]
     #?(:cljs [goog.events :as events])
+    [clojure.string :as str]
+    [cognitect.transit :as ct]
     [om.next :as om]
     [om.transit :as t]
-    [clojure.string :as str])
+    [untangled.client.logging :as log]
+    [untangled.client.util :as util])
   #?(:cljs (:import [goog.net XhrIo EventType])))
 
 (declare make-untangled-network)
@@ -138,51 +140,60 @@
 (defn mock-network [] (map->MockNetwork {}))
 
 
-(defn- on-ok [{:keys [response->edn app-state]} xhrio om-ok-cb query]
+(defn- on-ok [{:keys [response->edn app-state]} xhrio om-ok-cb ast-frag]
   (try
-    (when-let [response (response->edn (.getResponse xhrio) query @app-state)]
+    (when-let [response (response->edn (.getResponse xhrio) ast-frag @app-state)]
       (om-ok-cb response))
     (finally (.dispose xhrio))))
 
-(defn- on-error [{:keys [app-state on-network-error on-network-error]} xhrio om-error-cb query]
+(defn- on-error [{:keys [app-state on-network-error on-network-error]} xhrio om-error-cb ast-frag]
   (try
-    (om-error-cb (on-network-error xhrio @app-state query))
+    (om-error-cb (on-network-error xhrio @app-state ast-frag))
     (finally (.dispose xhrio))))
 
-(defn default-on-network-error [{:keys [on-network-error]} xhrio om-error-cb query]
+(defn default-on-network-error [{:keys [on-network-error]} xhrio om-error-cb ast-frag]
   (try
     (let [status (.getStatus xhrio)]
-      (log/error (str "ERROR: RestNetwork failed to process: " query "."))
+      (log/error (str "ERROR: RestNetwork failed to process: " ast-frag "."))
       (om-error-cb (if (zero? status) {:type :network} {})))
     (finally (.dispose xhrio))))
 
-(defrecord RestNetwork [app-state om-query->request response->edn on-network-error serialize-requests?]
+(s/def ::url string?)
+(s/def ::request-method #{:get :head :options :put :post :delete})
+(s/def ::headers (s/map-of string? any?))
+(s/def ::body any?)
+(s/def ::request
+  (s/keys :req-un [::url ::request-method] :opt-un [::headers ::body]))
+
+(defrecord RestNetwork [app-state ast-frag->request response->edn on-network-error serialize-requests?]
   NetworkBehavior
   (serialize-requests? [this] serialize-requests?)
   UntangledNetwork
   (send [this query ok-cb error-cb]
     #?(:cljs
-       (let [xhrio (make-xhrio), {:keys [url request-method headers body]} (om-query->request query @app-state)]
-         (.send xhrio url (name request-method) body headers)
-         (events/listen xhrio (.-SUCCESS EventType)
-           #(on-ok this xhrio ok-cb query))
-         (events/listen xhrio (.-ERROR EventType)
-           #(on-error this xhrio error-cb query)))))
+       (let [st @app-state, requests (keep (juxt identity (comp (partial util/conform! ::request) #(ast-frag->request % st))) (:children (om/query->ast query)))]
+         (doseq [[ast-frag {:keys [url request-method headers body]}] requests
+                 :let [xhrio (make-xhrio)]]
+           (.send xhrio url (name request-method) body headers)
+           (events/listen xhrio (.-SUCCESS EventType)
+             #(on-ok this xhrio ok-cb ast-frag))
+           (events/listen xhrio (.-ERROR EventType)
+             #(on-error this xhrio error-cb ast-frag))))))
   (start [this app]
     (assoc this :app-state (om/app-state (:reconciler app)))))
 
 (defn make-rest-network
   "Takes as kw arguments:
-   - :om-query->request              - (fn [query app-state] ... request)
+   - :ast-frag->request              - (fn [ast-frag app-state] ... request)
 
-   - :response->edn                  - (fn [json query app-state] ... edn)
+   - :response->edn                  - (fn [json ast-frag app-state] ... edn)
 
-   - :on-network-error (OPTIONAL)    - (fn [xhrio app-state query] ... om-error)
+   - :on-network-error (OPTIONAL)    - (fn [xhrio app-state ast-frag] ... om-error)
       - defaults to `default-on-network-error`
       - for docs see https://developers.google.com/closure/library/docs/xhrio
 
    - :serialize-requests? (OPTIONAL) - Boolean
-      - defaults to true
+      - defaults to `true`
 
    Returns an UntangledNetwork component, for use in untangled client networking as an additional remote."
   [& {:as opts}] (map->RestNetwork (merge {:on-network-error default-on-network-error :serialize-requests? true} opts)))

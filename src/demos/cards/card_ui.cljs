@@ -4,6 +4,7 @@
     cards.A-Introduction
     cards.component-local-state-cards
     cards.background-load-cards
+    cards.custom-rest-network-cards
     cards.error-handling-cards
     cards.initial-state-cards
     cards.lazy-loading-indicators-cards

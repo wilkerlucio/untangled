@@ -67,48 +67,58 @@
       (when-mocking
         (net/make-xhrio) => (js-obj "send" (fn [url method body headers] (reset! sent-request [url method body headers])))
         (events/listen & _) => nil
-        (component "om-query->request"
-          (assertions "takes a query, app state, and returns a request"
-            (-> (net/make-rest-network :om-query->request
-                  (fn test-om-query->request [query app-state]
-                    (assertions "test-om-query->request" query => '[::fake.query] app-state => ::test-app-state)
-                    {:url "/fake-url/325" :request-method :post :body ::test-body :headers ::test-headers}))
+        (component "ast-frag->request"
+          (assertions "takes an ast fragment, app state, and returns a request"
+            (-> (net/make-rest-network :ast-frag->request
+                  (fn test-ast-frag->request [ast-frag app-state]
+                    (assertions "ast-frag->request receives correct arguments"
+                      (namespace (:dispatch-key ast-frag)) => (namespace ::_)
+                      app-state => ::test-app-state)
+                    {:url "/fake-url/325" :request-method :post :body ::test-body :headers {"test" "headers"}}))
               (net/start {:reconciler ::reconciler})
-              (net/send '[::fake.query] nil nil)
+              (net/send '[::fake.query ::second.fragment] nil nil)
               (do @sent-request))
-            => ["/fake-url/325" "post" ::test-body ::test-headers]))))
+            => ["/fake-url/325" "post" ::test-body {"test" "headers"}]))))
 
     (let [response-edn (atom nil)]
       (when-mocking
-        (net/make-xhrio) => (js-obj "send" (constantly ::ignored) "dispose" (constantly ::ignored)
+        (net/make-xhrio) => (js-obj "send" (constantly ::ignored)
+                                    "dispose" (constantly ::ignored)
                                     "getResponse" (constantly ::response))
         (events/listen xhrio evt-type callback) => (when (= (.-SUCCESS EventType) evt-type) (callback))
         (component "response->edn"
-          (assertions "takes the response, query, app-state and returns the response parsed into edn"
-            (-> (net/make-rest-network :om-query->request (constantly {:url "/always-success" :request-method :get})
-                  :response->edn (fn test-response->edn [response query app-state]
-                                   (assertions "test-response->edn" response => ::response query => '[::fake.query] app-state => ::test-app-state)
+          (assertions "takes the response, an ast fragment, app-state and returns the response parsed into edn"
+            (-> (net/make-rest-network :ast-frag->request (constantly {:url "/always-success" :request-method :get})
+                  :response->edn (fn test-response->edn [response ast-frag app-state]
+                                   (assertions "response->edn receives correct arguments"
+                                     response => ::response
+                                     (namespace (:dispatch-key ast-frag)) => (namespace ::_)
+                                     app-state => ::test-app-state)
                                    {::test ::response}))
               (net/start {:reconciler ::reconciler})
-              (net/send '[::fake.query] (partial reset! response-edn) nil)
+              (net/send '[::fake.query ::second.fragment] (partial reset! response-edn) nil)
               (do @response-edn))
             => {::test ::response}))))
 
     (let [om-error (atom nil)
-          mock-xhrio (js-obj "send" (constantly ::ignored) "dispose" (constantly ::ignored)
+          mock-xhrio (js-obj "send" (constantly ::ignored)
+                             "dispose" (constantly ::ignored)
                              "getResponse" (constantly ::response))]
       (when-mocking
         (net/make-xhrio) => mock-xhrio
         (events/listen xhrio evt-type callback) => (when (= (.-ERROR EventType) evt-type) (callback))
         (component "on-network-error"
           (assertions
-            "takes the xhrio, app-state, query, and returns an error for the om error callback"
-            (-> (net/make-rest-network :om-query->request (constantly {:url "/always-error" :request-method :get})
-                  :on-network-error (fn test-on-network-error [xhrio app-state query]
-                                      (assertions "test-on-network-error" xhrio => mock-xhrio app-state => ::test-app-state query => '[::fake.query])
+            "takes the xhrio, app-state, an ast fragment, and returns an error for the om error callback"
+            (-> (net/make-rest-network :ast-frag->request (constantly {:url "/always-error" :request-method :get})
+                  :on-network-error (fn test-on-network-error [xhrio app-state ast-frag]
+                                      (assertions "on-network-error receives correct arguments"
+                                        xhrio => mock-xhrio
+                                        app-state => ::test-app-state
+                                        (namespace (:dispatch-key ast-frag)) => (namespace ::_))
                                       {:type ::unknown-error}))
               (net/start {:reconciler ::reconciler})
-              (net/send '[::fake.query] nil (partial reset! om-error))
+              (net/send '[::fake.query ::second.fragment] nil (partial reset! om-error))
               (do @om-error))
             => {:type ::unknown-error}
             "defaults to default-on-network-error"

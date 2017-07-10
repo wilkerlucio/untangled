@@ -51,7 +51,6 @@
   (when (nil? target)
     (log/error (log/value-message "Unknown app state mutation. Have you required the file with your mutations?" k))))
 
-
 (defn toggle!
   "Toggle the given boolean `field` on the specified component. It is recommended you use this function only on
   UI-related data (e.g. form checkbox checked status) and write clear top-level transactions for anything more complicated."
